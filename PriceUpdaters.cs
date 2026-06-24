@@ -8,6 +8,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Diagnostics;
 using Microsoft.Playwright;
 
 namespace FoodManager
@@ -186,53 +187,184 @@ namespace FoodManager
         public static async Task<decimal?> FetchPriceFromAtbAsync(string url, CancellationToken ct)
         {
             if (string.IsNullOrWhiteSpace(url)) return null;
+
+            // per-call budget to fail fast if caller doesn't cancel
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            linked.CancelAfter(TimeSpan.FromSeconds(8));
+            var token = linked.Token;
+
             try
             {
                 return await RunWithPageAsync(async page =>
                 {
-                    // If cancellation requested before navigation, return quickly
-                    ct.ThrowIfCancellationRequested();
+                    token.ThrowIfCancellationRequested();
+                    var sw = Stopwatch.StartNew();
+                    try
+                    {
+                        // Try to navigate (shorter timeout than NAV_TIMEOUT_MS)
+                        await page.GotoAsync(url, new PageGotoOptions
+                        {
+                            WaitUntil = WaitUntilState.DOMContentLoaded,
+                            Timeout = Math.Min(NAV_TIMEOUT_MS, 8000)
+                        });
 
-                    await page.GotoAsync(url, new PageGotoOptions { WaitUntil = WaitUntilState.DOMContentLoaded, Timeout = NAV_TIMEOUT_MS });
+                        // locate price container
+                        var locator = page.Locator(".product-price__top").First;
 
-                    // prefer aria-label or inner text
-                    var locator = page.Locator(".product-price__top").First;
-                    string raw = await TryGetAttrOrText(locator, "aria-label").ConfigureAwait(false)
-                               ?? await TryInnerTextSafe(locator).ConfigureAwait(false);
-                    if (string.IsNullOrWhiteSpace(raw)) return (decimal?)null;
-                    var m = Regex.Match(raw, @"(\d+)[^\d]+(\d{2})");
-                    if (!m.Success) return (decimal?)null;
-                    var s = $"{m.Groups[1].Value}.{m.Groups[2].Value}";
-                    return decimal.TryParse(s, NumberStyles.Number, CultureInfo.InvariantCulture, out var v) ? (decimal?)v : null;
-                }, ct).ConfigureAwait(false);
+                        // Wait specifically for the price element to appear (short wait)
+                        try
+                        {
+                            await locator.WaitForAsync(new LocatorWaitForOptions { Timeout = 3000 });
+                        }
+                        catch (TimeoutException)
+                        {
+                            // element not found quickly — try alternative selectors before giving up
+                            var alt = page.Locator(".product-price, .price, [data-testid=\"product-price\"]");
+                            try
+                            {
+                                await alt.First.WaitForAsync(new LocatorWaitForOptions { Timeout = 2000 });
+                                locator = alt.First;
+                            }
+                            catch { /* not found */ }
+                        }
+
+                        // 1) Try aria-label or combined parts (int + coin)
+                        string? raw = null;
+                        try
+                        {
+                            raw = await TryGetAttrOrText(locator, "aria-label").ConfigureAwait(false);
+                        }
+                        catch { raw = null; }
+
+                        if (string.IsNullOrWhiteSpace(raw))
+                        {
+                            // Try to read integer part and coin part separately
+                            string? intPart = null;
+                            try
+                            {
+                                // outer span usually contains integer part (may include trailing punctuation)
+                                intPart = (await locator.Locator("span").First.InnerTextAsync().ConfigureAwait(false))?.Trim();
+                            }
+                            catch { intPart = null; }
+
+                            string? coinPart = null;
+                            try
+                            {
+                                var coinLoc = locator.Locator(".product-price__coin");
+                                if (await coinLoc.CountAsync().ConfigureAwait(false) > 0)
+                                    coinPart = (await coinLoc.First.InnerTextAsync().ConfigureAwait(false))?.Trim();
+                            }
+                            catch { coinPart = null; }
+
+                            if (!string.IsNullOrWhiteSpace(intPart) && !string.IsNullOrWhiteSpace(coinPart))
+                            {
+                                var intOnly = Regex.Match(intPart ?? "", @"\d+").Value;
+                                raw = $"{intOnly}.{coinPart}";
+                            }
+                            else
+                            {
+                                // fallback: full innerText of container
+                                try { raw = (await locator.InnerTextAsync().ConfigureAwait(false))?.Trim(); } catch { raw = null; }
+                            }
+                        }
+
+                        sw.Stop();
+                        try { DebugLogger.Log($"ATB fetch: {url} elapsed={sw.Elapsed.TotalSeconds:F2}s rawLen={(raw?.Length ?? 0)} raw='{raw}'"); } catch { }
+
+                        if (string.IsNullOrWhiteSpace(raw)) return (decimal?)null;
+
+                        // Normalize and extract number
+                        // allow formats like "31.50", "31,50", "31 50" etc.
+                        var normalized = Regex.Match(raw.Replace("\u00A0", " "), @"\d+(?:[.,]\d{2})?").Value;
+                        if (string.IsNullOrWhiteSpace(normalized))
+                        {
+                            var m = Regex.Match(raw, @"(\d+)[^\d]+(\d{2})");
+                            if (!m.Success) return (decimal?)null;
+                            normalized = $"{m.Groups[1].Value}.{m.Groups[2].Value}";
+                        }
+                        normalized = normalized.Replace(',', '.').Trim();
+                        if (decimal.TryParse(normalized, NumberStyles.Number, CultureInfo.InvariantCulture, out var v))
+                            return (decimal?)v;
+                        return (decimal?)null;
+                    }
+                    catch (TimeoutException tex)
+                    {
+                        try { DebugLogger.LogError($"ATB navigation/selector timeout for {url}", tex); } catch { }
+                        return null;
+                    }
+                }, token).ConfigureAwait(false);
             }
             catch (OperationCanceledException) { throw; }
-            catch { return null; }
+            catch (Exception ex)
+            {
+                try { DebugLogger.LogError($"ATB fetch failed for {url}", ex); } catch { }
+                return null;
+            }
         }
 
         public static async Task<decimal?> FetchPriceFromSilpoAsync(string url, CancellationToken ct)
         {
             if (string.IsNullOrWhiteSpace(url)) return null;
+
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            linked.CancelAfter(TimeSpan.FromSeconds(8));
+            var token = linked.Token;
+
             try
             {
                 return await RunWithPageAsync(async page =>
                 {
-                    ct.ThrowIfCancellationRequested();
+                    token.ThrowIfCancellationRequested();
+                    var sw = Stopwatch.StartNew();
+                    try
+                    {
+                        await page.GotoAsync(url, new PageGotoOptions { WaitUntil = WaitUntilState.DOMContentLoaded, Timeout = Math.Min(NAV_TIMEOUT_MS, 8000) });
 
-                    await page.GotoAsync(url, new PageGotoOptions { WaitUntil = WaitUntilState.DOMContentLoaded, Timeout = NAV_TIMEOUT_MS });
+                        var locator = page.Locator(".main-price.ng-star-inserted").First;
+                        try
+                        {
+                            await locator.WaitForAsync(new LocatorWaitForOptions { Timeout = 3000 });
+                        }
+                        catch (TimeoutException)
+                        {
+                            var alt = page.Locator(".product-price, .price, [data-testid=\"product-price\"]");
+                            try
+                            {
+                                await alt.First.WaitForAsync(new LocatorWaitForOptions { Timeout = 2000 });
+                                locator = alt.First;
+                            }
+                            catch { /* not found */ }
+                        }
 
-                    var locator = page.Locator(".main-price.ng-star-inserted").First;
-                    var raw = await TryGetAttrOrText(locator, "aria-label").ConfigureAwait(false)
-                              ?? await TryInnerTextSafe(locator).ConfigureAwait(false);
-                    if (string.IsNullOrWhiteSpace(raw)) return (decimal?)null;
-                    var m = Regex.Match(raw, @"(\d+(?:[.,]\d+)?)");
-                    if (!m.Success) return (decimal?)null;
-                    var s = m.Groups[1].Value.Replace(',', '.');
-                    return decimal.TryParse(s, NumberStyles.Number, CultureInfo.InvariantCulture, out var v) ? (decimal?)v : null;
-                }, ct).ConfigureAwait(false);
+                        string? raw = null;
+                        try { raw = await TryGetAttrOrText(locator, "aria-label").ConfigureAwait(false); } catch { raw = null; }
+                        if (string.IsNullOrWhiteSpace(raw))
+                        {
+                            try { raw = (await locator.InnerTextAsync().ConfigureAwait(false))?.Trim(); } catch { raw = null; }
+                        }
+
+                        sw.Stop();
+                        try { DebugLogger.Log($"Silpo fetch: {url} elapsed={sw.Elapsed.TotalSeconds:F2}s rawLen={(raw?.Length ?? 0)} raw='{raw}'"); } catch { }
+
+                        if (string.IsNullOrWhiteSpace(raw)) return (decimal?)null;
+                        var m = Regex.Match(raw, @"(\d+(?:[.,]\d+)?)");
+                        if (!m.Success) return (decimal?)null;
+                        var s = m.Groups[1].Value.Replace(',', '.');
+                        return decimal.TryParse(s, NumberStyles.Number, CultureInfo.InvariantCulture, out var v) ? (decimal?)v : null;
+                    }
+                    catch (TimeoutException tex)
+                    {
+                        try { DebugLogger.LogError($"Silpo navigation/selector timeout for {url}", tex); } catch { }
+                        return null;
+                    }
+                }, token).ConfigureAwait(false);
             }
             catch (OperationCanceledException) { throw; }
-            catch { return null; }
+            catch (Exception ex)
+            {
+                try { DebugLogger.LogError($"Silpo fetch failed for {url}", ex); } catch { }
+                return null;
+            }
         }
 
         // small helpers for playwright locators
