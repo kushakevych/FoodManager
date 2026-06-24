@@ -1,166 +1,63 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
 namespace FoodManager
 {
+    /// <summary>
+    /// Debug wrapper for <see cref="PriceUpdaters"/> that logs every fetch step.
+    /// Mirrors UpdatePricesForProductAsync but runs stores IN PARALLEL with per-store timing.
+    /// </summary>
     public static class PriceUpdaterDebug
     {
+        // Maps each store to its fetcher — keeps in sync with PriceUpdaters.Fetchers automatically
+        // by delegating to the same public methods.
+        private static readonly IReadOnlyDictionary<string, Func<string, CancellationToken, Task<decimal?>>> Fetchers =
+            new Dictionary<string, Func<string, CancellationToken, Task<decimal?>>>(StringComparer.OrdinalIgnoreCase)
+            {
+                [PriceUpdaters.StoreATB]     = PriceUpdaters.FetchPriceFromAtbAsync,
+                [PriceUpdaters.StoreSilpo]   = PriceUpdaters.FetchPriceFromSilpoAsync,
+                [PriceUpdaters.StoreStolich] = PriceUpdaters.FetchPriceFromStolichnyRynokAsync,
+                [PriceUpdaters.StoreMetro]   = PriceUpdaters.FetchPriceFromMetroAsync,
+                [PriceUpdaters.StoreVK]      = PriceUpdaters.FetchPriceFromVelykaKyshenyaAsync,
+                [PriceUpdaters.StoreAshan]   = PriceUpdaters.FetchPriceFromMetroAsync,
+                [PriceUpdaters.StoreNovus]   = PriceUpdaters.FetchPriceFromNovusAsync,
+            };
+
         public static void StartDebugLog()
         {
             DebugLogger.Clear();
             DebugLogger.Log("Debug log initialized.");
         }
 
+        /// <summary>
+        /// Updates all store prices IN PARALLEL, logging every step with elapsed timings.
+        /// Returns <c>true</c> if any price changed.
+        /// </summary>
         public static async Task<bool> UpdateProductWithLogging(Product p, CancellationToken ct)
         {
             if (p == null) throw new ArgumentNullException(nameof(p));
             DebugLogger.Log($"START product id={p.Id} name='{p.Name}'");
 
-            var changed = false;
-            var links = p.Links ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var links  = p.Links             ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             var manual = p.ManualPriceSources ?? new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-            async Task<decimal?> CallAndLogAsync(string storeName, Func<string, CancellationToken, Task<decimal?>> fetcher, string? arg)
-            {
-                if (manual.Contains(storeName))
-                {
-                    DebugLogger.Log($"SKIP {storeName}: manual source set by user.");
-                    return null;
-                }
+            // Build one task per eligible store
+            var storeTasks = Fetchers
+                .Where(kv => !manual.Contains(kv.Key)
+                          && links.TryGetValue(kv.Key, out var u)
+                          && !string.IsNullOrWhiteSpace(u))
+                .Select(kv => FetchStoreWithLoggingAsync(p, kv.Key, kv.Value, links[kv.Key], ct))
+                .ToList();
 
-                if (string.IsNullOrWhiteSpace(arg))
-                {
-                    DebugLogger.Log($"SKIP {storeName}: no link/value provided.");
-                    return null;
-                }
-
-                var sw = Stopwatch.StartNew();
-                try
-                {
-                    DebugLogger.Log($"CALL {storeName} start (arg='{(arg?.Length > 120 ? arg.Substring(0, 120) + "..." : arg)}')");
-                    var price = await fetcher(arg, ct).ConfigureAwait(false);
-                    sw.Stop();
-                    DebugLogger.Log($"CALL {storeName} done in {sw.ElapsedMilliseconds} ms => {(price.HasValue ? price.Value.ToString("0.##") : "NULL")}");
-                    return price;
-                }
-                catch (OperationCanceledException)
-                {
-                    sw.Stop();
-                    DebugLogger.Log($"CALL {storeName} cancelled after {sw.ElapsedMilliseconds} ms");
-                    throw;
-                }
-                catch (Exception ex)
-                {
-                    sw.Stop();
-                    DebugLogger.LogError($"CALL {storeName} failed after {sw.ElapsedMilliseconds} ms", ex);
-                    return null;
-                }
-            }
-
+            var changed = false;
             try
             {
-                if (links.TryGetValue(PriceUpdaters.StoreATB, out var atbUrl))
-                {
-                    var price = await CallAndLogAsync(PriceUpdaters.StoreATB, PriceUpdaters.FetchPriceFromAtbAsync, atbUrl);
-                    if (price.HasValue)
-                    {
-                        if (!p.Prices.ContainsKey(PriceUpdaters.StoreATB) || p.Prices[PriceUpdaters.StoreATB] != price.Value)
-                        {
-                            p.Prices[PriceUpdaters.StoreATB] = price.Value;
-                            changed = true;
-                            DebugLogger.Log($"UPDATE {p.Name} {PriceUpdaters.StoreATB} => {price.Value}");
-                        }
-                    }
-                }
-
-                if (links.TryGetValue(PriceUpdaters.StoreSilpo, out var silpoUrl))
-                {
-                    var price = await CallAndLogAsync(PriceUpdaters.StoreSilpo, PriceUpdaters.FetchPriceFromSilpoAsync, silpoUrl);
-                    if (price.HasValue)
-                    {
-                        if (!p.Prices.ContainsKey(PriceUpdaters.StoreSilpo) || p.Prices[PriceUpdaters.StoreSilpo] != price.Value)
-                        {
-                            p.Prices[PriceUpdaters.StoreSilpo] = price.Value;
-                            changed = true;
-                            DebugLogger.Log($"UPDATE {p.Name} {PriceUpdaters.StoreSilpo} => {price.Value}");
-                        }
-                    }
-                }
-
-                if (links.TryGetValue(PriceUpdaters.StoreStolich, out var stolQuery))
-                {
-                    var price = await CallAndLogAsync(PriceUpdaters.StoreStolich, PriceUpdaters.FetchPriceFromStolichnyRynokAsync, stolQuery);
-                    if (price.HasValue)
-                    {
-                        if (!p.Prices.ContainsKey(PriceUpdaters.StoreStolich) || p.Prices[PriceUpdaters.StoreStolich] != price.Value)
-                        {
-                            p.Prices[PriceUpdaters.StoreStolich] = price.Value;
-                            changed = true;
-                            DebugLogger.Log($"UPDATE {p.Name} {PriceUpdaters.StoreStolich} => {price.Value}");
-                        }
-                    }
-                }
-
-                if (links.TryGetValue(PriceUpdaters.StoreMetro, out var metroUrl))
-                {
-                    var price = await CallAndLogAsync(PriceUpdaters.StoreMetro, PriceUpdaters.FetchPriceFromMetroAsync, metroUrl);
-                    if (price.HasValue)
-                    {
-                        if (!p.Prices.ContainsKey(PriceUpdaters.StoreMetro) || p.Prices[PriceUpdaters.StoreMetro] != price.Value)
-                        {
-                            p.Prices[PriceUpdaters.StoreMetro] = price.Value;
-                            changed = true;
-                            DebugLogger.Log($"UPDATE {p.Name} {PriceUpdaters.StoreMetro} => {price.Value}");
-                        }
-                    }
-                }
-
-                if (links.TryGetValue(PriceUpdaters.StoreVK, out var vkUrl))
-                {
-                    var price = await CallAndLogAsync(PriceUpdaters.StoreVK, PriceUpdaters.FetchPriceFromVelykaKyshenyaAsync, vkUrl);
-                    if (price.HasValue)
-                    {
-                        if (!p.Prices.ContainsKey(PriceUpdaters.StoreVK) || p.Prices[PriceUpdaters.StoreVK] != price.Value)
-                        {
-                            p.Prices[PriceUpdaters.StoreVK] = price.Value;
-                            changed = true;
-                            DebugLogger.Log($"UPDATE {p.Name} {PriceUpdaters.StoreVK} => {price.Value}");
-                        }
-                    }
-                }
-
-                // Ashan call (reuse Metro parsing)
-                if (links.TryGetValue(PriceUpdaters.StoreAshan, out var ashanUrl))
-                {
-                    var price = await CallAndLogAsync(PriceUpdaters.StoreAshan, PriceUpdaters.FetchPriceFromMetroAsync, ashanUrl);
-                    if (price.HasValue)
-                    {
-                        if (!p.Prices.ContainsKey(PriceUpdaters.StoreAshan) || p.Prices[PriceUpdaters.StoreAshan] != price.Value)
-                        {
-                            p.Prices[PriceUpdaters.StoreAshan] = price.Value;
-                            changed = true;
-                            DebugLogger.Log($"UPDATE {p.Name} {PriceUpdaters.StoreAshan} => {price.Value}");
-                        }
-                    }
-                }
-
-                // Novus
-                if (links.TryGetValue(PriceUpdaters.StoreNovus, out var novUrl))
-                {
-                    var price = await CallAndLogAsync(PriceUpdaters.StoreNovus, PriceUpdaters.FetchPriceFromNovusAsync, novUrl);
-                    if (price.HasValue)
-                    {
-                        if (!p.Prices.ContainsKey(PriceUpdaters.StoreNovus) || p.Prices[PriceUpdaters.StoreNovus] != price.Value)
-                        {
-                            p.Prices[PriceUpdaters.StoreNovus] = price.Value;
-                            changed = true;
-                            DebugLogger.Log($"UPDATE {p.Name} {PriceUpdaters.StoreNovus} => {price.Value}");
-                        }
-                    }
-                }
+                var results = await Task.WhenAll(storeTasks).ConfigureAwait(false);
+                changed = results.Any(r => r);
             }
             catch (OperationCanceledException)
             {
@@ -179,5 +76,57 @@ namespace FoodManager
             return changed;
         }
 
+        // ── Per-store logging wrapper ─────────────────────────────────────────
+
+        private static async Task<bool> FetchStoreWithLoggingAsync(
+            Product p, string storeName,
+            Func<string, CancellationToken, Task<decimal?>> fetcher,
+            string arg, CancellationToken ct)
+        {
+            // Truncate long arguments in log output
+            var argPreview = arg.Length > 120 ? arg[..120] + "..." : arg;
+
+            DebugLogger.Log($"CALL {storeName} start (arg='{argPreview}')");
+            var sw = Stopwatch.StartNew();
+
+            decimal? price = null;
+            try
+            {
+                price = await fetcher(arg, ct).ConfigureAwait(false);
+                sw.Stop();
+                DebugLogger.Log($"CALL {storeName} done in {sw.ElapsedMilliseconds} ms => {(price.HasValue ? price.Value.ToString("0.##") : "NULL")}");
+            }
+            catch (OperationCanceledException)
+            {
+                sw.Stop();
+                DebugLogger.Log($"CALL {storeName} cancelled after {sw.ElapsedMilliseconds} ms");
+                throw;
+            }
+            catch (Exception ex)
+            {
+                sw.Stop();
+                DebugLogger.LogError($"CALL {storeName} failed after {sw.ElapsedMilliseconds} ms", ex);
+                return false;
+            }
+
+            if (!price.HasValue) return false;
+
+            // Thread-safe read + write — check if value actually changed
+            bool changed = false;
+            lock (p)
+            {
+                p.Prices ??= new Dictionary<string, decimal>();
+                if (!p.Prices.TryGetValue(storeName, out var old) || old != price.Value)
+                {
+                    p.Prices[storeName] = price.Value;
+                    changed = true;
+                }
+            }
+
+            if (changed)
+                DebugLogger.Log($"UPDATE {p.Name} {storeName} => {price.Value}");
+
+            return changed;
+        }
     }
 }
