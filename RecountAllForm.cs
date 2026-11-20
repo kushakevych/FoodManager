@@ -34,9 +34,9 @@ namespace FoodManager
                 var pid = Convert.ToInt32(row.Cells[0].Value);
                 var oldQty = Convert.ToInt32(row.Cells[3].Value);
                 var newQtyParsed = 0;
-                if (!int.TryParse(Convert.ToString(row.Cells[4].Value), out newQtyParsed))
+                if (!int.TryParse(Convert.ToString(row.Cells[4].Value), out newQtyParsed) || newQtyParsed < 0)
                 {
-                    MessageBox.Show($"Невірне число для продукту '{row.Cells[1].Value}'", "Помилка", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    MessageBox.Show($"Введіть коректне невід'ємне число для продукту '{row.Cells[1].Value}'", "Помилка", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     return;
                 }
                 var unit = Convert.ToString(row.Cells[2].Value) ?? "g";

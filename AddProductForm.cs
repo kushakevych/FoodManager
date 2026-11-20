@@ -11,9 +11,9 @@ namespace FoodManager
 
         private int _editingIndex = -1;
 
-        public AddProductForm() : this(null) { }
+        public AddProductForm() : this((Product?)null) { }
 
-        public AddProductForm(Product existing)
+        public AddProductForm(Product? existing)
         {
             InitializeComponent();
 

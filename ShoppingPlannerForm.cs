@@ -229,7 +229,7 @@ namespace FoodManager
                     }
                 }
 
-                string productUnit = product?.InventoryUnit; // may be null -> use ingredient/unit info
+                string? productUnit = product?.InventoryUnit; // may be null -> use ingredient/unit info
 
                 // Direct buy values
                 directBuys.TryGetValue(name, out var direct); // default (0,"")
@@ -773,7 +773,7 @@ namespace FoodManager
 
             try
             {
-                OfficeOpenXml.ExcelPackage.License.SetNonCommercialPersonal("Kostiantyn Yevdokymenko");
+                ExcelPackage.License.SetNonCommercialPersonal("FoodManager");
                 using var package = new ExcelPackage(new FileInfo(sfd.FileName));
                 var ws = package.Workbook.Worksheets.Add("ShoppingPlan");
 
@@ -1058,23 +1058,43 @@ namespace FoodManager
             }
         }
 
-        private string EscapeCsv(string v) => $"\"{(v ?? "").Replace("\"", "\"\"")}\"";
+        private void btnCopyMessenger_Click(object? sender, EventArgs e)
+        {
+            if (_lastPlan == null || _lastPlan.Count == 0)
+            {
+                MessageBox.Show("Немає даних для списку. Спочатку натисніть 'Розрахувати'.", "Увага", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            var nameToSelectedStore = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+            foreach (DataGridViewRow r in dgvProducts.Rows)
+            {
+                if (r.IsNewRow) continue;
+                var nm = Convert.ToString(r.Cells[2].Value) ?? "";
+                if (dgvProducts.Columns.Contains("selectedStoreCol"))
+                {
+                    var val = Convert.ToString(r.Cells["selectedStoreCol"].Value);
+                    if (!string.IsNullOrEmpty(val)) nameToSelectedStore[nm] = val;
+                }
+            }
+
+            var messengerService = new Services.Export.MessengerExportService();
+            var text = messengerService.FormatForMessenger(_lastPlan, _lastProductsByName, nameToSelectedStore);
+
+            try
+            {
+                Clipboard.SetText(text);
+                MessageBox.Show("Список покупок скопійовано у буфер обміну!\n\nТепер ви можете просто вставити його (Ctrl+V) у Telegram, Viber чи зберегти в телефоні.", "Скопійовано", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Помилка роботи з буфером обміну: {ex.Message}", "Помилка", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
 
         private void btnClose_Click(object sender, EventArgs e)
         {
             Close();
-        }
-
-        private class PlanEntry
-        {
-            public string Name { get; set; } = "";
-            public string Unit { get; set; } = "g";
-            public int OriginalQty { get; set; } = 0; // preserved original computed amount (before rounding)
-            public int TotalQty { get; set; } = 0; // possibly rounded to pack
-            public int DirectQty { get; set; } = 0;
-            public int RecipeQty { get; set; } = 0;
-            public int? Packs { get; set; } = null; // number of packs after rounding (if any)
-            public string Note { get; set; } = "";
         }
     }
 }

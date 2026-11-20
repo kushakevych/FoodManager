@@ -1,33 +1,34 @@
-Food Manager - WinForms + SQLite (sample project)
+Food Manager - WinForms + SQLite (.NET 8)
 ================================================
-What this contains
-- A simple WinForms app (C#, .NET 6) that manages products, recipes, inventory, and generates a simple shopping list.
-- SQLite database (food.db) auto-created at first run with sample data.
-- Simple UI built with DataGridView and dialog forms for adding products and recipes.
+Модернізований додаток для управління продуктами, стравами/рецептами, обліком запасів, автоматичного парсингу актуальних цін у супермаркетах, тижневого планування раціону та оптимізованого формування списку покупок з експортом у Excel.
 
-How to open and run
-1. Install .NET 6 SDK and Visual Studio 2022 (or Visual Studio 2022 Community with .NET desktop workload).
-2. Open the folder in Visual Studio or via command-line.
-3. Restore NuGet packages (Microsoft.Data.Sqlite).
-4. Build and run.
+Основні можливості
+------------------
+- **Каталог продуктів**: найменування, одиниці (г/шт), поживна цінність (білки, жири, вуглеводи, цукри, насичені жири, калорійність, клітковина), посилання на інтернет-магазини, фасовки та штрих-коди.
+- **Страви та рецепти**: формування страв з довільних інгредієнтів, розрахунок калорійності, БЖВ та вартості страви за найвигіднішими цінами інгредієнтів.
+- **Облік та інвентаризація**: фіксація залишків, списання, оприбуткування та історія переобліків із транзакційними змінами.
+- **Парсинг цін**: паралельний моніторинг цін у мережах (АТБ, Сільпо, Метро, Столичний ринок, NOVUS, Ашан) на базі Playwright Chromium та HTTP/JSON-LD парсерів із кешуванням.
+- **Тижневе меню (Weekly Planner)**: розподіл страв за днями тижня, автоматичний підрахунок добових та тижневих підсумків, експорт у Excel (XLSX).
+- **Оптимізований калькулятор закупок (Shopping Planner)**: розрахунок потреби на основі обраних страв та прямого списку покупок за вирахуванням поточних залишків на складі, округлення до цілих упаковок відповідно до обраного магазину, порівняння цін між мережами та експорт у XLSX.
 
-Notes for students / maintainers
-- Keep the code simple. DataAccess.cs contains SQL and basic CRUD operations.
-- Prices and barcodes are stored as JSON strings to allow flexible dictionaries/arrays.
-- Nutrition data is stored as JSON in the 'nutrition_json' column.
-- Shopping list generation is simplistic: it aggregates ingredients from all recipes and subtracts inventory (by grams).
-- Purchasing unit granularity: product.WeightPerUnitG is provided and can be used to round purchase quantities to integer units in future improvements.
+Архітектура проекту
+-------------------
+Проект переведено на Clean/Layered Architecture:
+- `Models/`: Чисті доменні сутності (`Product`, `Recipe`, `NutritionInfo`, `NutritionTotals`, `IngredientAmount`, `PlanEntry`, `RecountModels`).
+- `Services/Database/`: Інтерфейс `IDatabaseService` та реалізація `DatabaseService` (параметризовані запити SQLite, автоматичні міграції, індексація, усунення проблеми N+1 запитів, транзакційність).
+- `Services/Scrapers/`: Виділений пул браузера `IBrowserPool` (`BrowserPool`), сервіс паралельного парсингу `IPriceScraperService` (`PriceScraperService`) із пулом з'єднань, кешуванням Столичного ринку та безпечним скасуванням через `CancellationToken`.
+- `Services/Planning/`: `IShoppingCalculationService` та `IWeeklyPlannerService` — чиста бізнес-логіка розрахунків, відділена від WinForms.
+- `Services/Export/`: `IExcelExportService` (`ExcelExportService`) на базі EPPlus 8 із форматуванням, стилями та формулами.
+- `Services/Logging/`: Потокобезпечний логер `FileAppLogger` (`IAppLogger`).
+- `Common/`: Централізовані константи магазинів та одиниць виміру (`StoreConstants`).
+- `tests/FoodManager.Tests/`: Набір модульних тестів (xUnit) для перевірки розрахунків, нормалізації цін, парсингу та бази даних.
 
-Files of interest
-- Program.cs, MainForm.cs (+ Designer), DataAccess.cs, Models.cs
-- AddProductForm.*, AddRecipeForm.*: simple dialog forms
-- food.db: initial database (created on first run if not present)
-
-Limitations & suggested improvements
-- No input validation beyond basic parsing.
-- No transactions for complex operations.
-- UI needs polish (labels, icons, localized texts).
-- Shopping list currently considers ALL recipes; later allow selecting which recipes/meals to plan for.
-- Price optimization (choose cheapest store) can be added by computing cost per gram using price dictionaries.
-
-DESIGN.md contains a textual UI design and guidance.
+Як запустити
+------------
+1. Встановіть .NET 8 SDK або .NET 9 SDK.
+2. Збірка:
+   `dotnet build`
+3. Запуск модульних тестів:
+   `dotnet test`
+4. Запуск додатку:
+   `dotnet run --project FoodManager.csproj`

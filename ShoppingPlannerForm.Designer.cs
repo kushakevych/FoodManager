@@ -9,6 +9,7 @@ namespace FoodManager
         private System.Windows.Forms.TextBox txtResult;
         private System.Windows.Forms.Button btnClose;
         private System.Windows.Forms.Button btnExport;
+        private System.Windows.Forms.Button btnCopyMessenger;
 
         // new checkboxes
         private System.Windows.Forms.CheckBox chkConsiderInventoryForDirectBuys;
@@ -38,6 +39,7 @@ namespace FoodManager
             txtResult = new TextBox();
             btnClose = new Button();
             btnExport = new Button();
+            btnCopyMessenger = new Button();
             chkConsiderInventoryForDirectBuys = new CheckBox();
             chkRoundToPack = new CheckBox();
             ((System.ComponentModel.ISupportInitialize)dgvProducts).BeginInit();
@@ -170,10 +172,19 @@ namespace FoodManager
             // 
             btnExport.Location = new Point(1633, 12);
             btnExport.Name = "btnExport";
-            btnExport.Size = new Size(253, 40);
+            btnExport.Size = new Size(120, 40);
             btnExport.TabIndex = 3;
             btnExport.Text = "Експорт XLSX";
             btnExport.Click += btnExport_Click;
+            // 
+            // btnCopyMessenger
+            // 
+            btnCopyMessenger.Location = new Point(1760, 12);
+            btnCopyMessenger.Name = "btnCopyMessenger";
+            btnCopyMessenger.Size = new Size(126, 40);
+            btnCopyMessenger.TabIndex = 7;
+            btnCopyMessenger.Text = "📋 Telegram/Viber";
+            btnCopyMessenger.Click += btnCopyMessenger_Click;
             // 
             // chkConsiderInventoryForDirectBuys
             // 
@@ -200,6 +211,7 @@ namespace FoodManager
             Controls.Add(dgvRecipes);
             Controls.Add(btnCompute);
             Controls.Add(btnExport);
+            Controls.Add(btnCopyMessenger);
             Controls.Add(txtResult);
             Controls.Add(btnClose);
             Name = "ShoppingPlannerForm";

@@ -12,9 +12,9 @@ namespace FoodManager
         // internal storage for ingredients while editing
         private Dictionary<string, IngredientAmount> _ingredients = new Dictionary<string, IngredientAmount>();
 
-        public AddRecipeForm() : this(null) { }
+        public AddRecipeForm() : this((Recipe?)null) { }
 
-        public AddRecipeForm(Recipe existing)
+        public AddRecipeForm(Recipe? existing)
         {
             InitializeComponent();
             cmbStatus.Items.AddRange(new string[] { "сніданок", "обід", "вечеря", "перекус" });
@@ -141,6 +141,7 @@ namespace FoodManager
         {
             if (lstIngredients.SelectedItem == null) return;
             var txt = lstIngredients.SelectedItem.ToString();
+            if (string.IsNullOrEmpty(txt)) return;
             var idx = txt.IndexOf(':');
             if (idx > 0)
             {

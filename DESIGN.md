@@ -1,44 +1,49 @@
-UI Design (textual)
--------------------
-Goal: Simple, clear layout so a student can maintain it.
+Архітектурний дизайн та структура системи (FoodManager)
+======================================================
 
-Main window (MainForm)
-- TabControl with three tabs:
-  1. 'Продукти' (Products)
-     - DataGridView columns: ID, Найменування, Вага г/шт, Ціни, Штрих-коди
-     - Buttons: Додати, Видалити
-     - Add opens AddProductForm
-  2. 'Страви' (Recipes)
-     - DataGridView columns: ID, Найменування, Статус, Інгредієнти
-     - Buttons: Додати, Видалити
-     - Add opens AddRecipeForm
-  3. 'Облік' (Inventory)
-     - DataGridView columns: ID, Найменування, Кількість (г)
-     - Buttons: Додати в облік, Списати, Згенерувати закупки
-     - Add/Split use InputBox to enter grams (integer)
-     - Generate shopping aggregates ingredients from all recipes and subtracts current inventory.
+1. Концепція та цілі рефакторингу
+---------------------------------
+Головна мета — перетворення початкового прототипу на надійне, модульне та масштабоване рішення:
+- Розділення обов'язків (SRP / Separation of Concerns) між представленням (WinForms), бізнес-логікою (розрахунки, планування, округлення) та інфраструктурою (БД SQLite, парсинг Playwright/HTTP, експорт EPPlus).
+- Повне усунення дублювання коду (DRY) між скрейперами, пулами браузера, розрахунками нутрієнтів та експортом.
+- 0 попереджень компілятора (Nullable Reference Types, modern .NET 8 idioms).
+- 100% покриття ключової бізнес-логіки модульними тестами (xUnit).
 
-Dialogs
-- AddProductForm
-  - TextBoxes for name, weight, nutrients (carbs, sugars, fats, sat, protein, kcal)
-  - Textbox for prices (format Market:12.5;Other:11)
-  - Textbox for barcodes (comma separated)
-  - OK/Cancel
-- AddRecipeForm
-  - Name, Status (combo), Ingredients (format Product:grams;Other:50)
-  - OK/Cancel
+2. Архітектурні шари
+--------------------
+- **Домен (Models)**:
+  `Product`, `Recipe`, `NutritionInfo`, `NutritionTotals`, `IngredientAmount`, `PlanEntry`, `RecountSession`, `RecountItemRow`.
+  Сутності інкапсулюють правила розрахунку цін за одиницю (`PricePerUnitFromStore`), нормалізацію до базової фасовки (`NormalizePriceToDefault`), та перевірку одиниць виміру.
 
-Data model decisions
-- Prices and barcodes stored as JSON strings to avoid complex relational schema for this MVP.
-- Inventory is stored in grams per entry to allow adding and subtracting as events.
-- Recipe ingredients reference products by name for simplicity (could be changed to product_id in future).
+- **Шар доступу до даних (Services/Database)**:
+  `IDatabaseService` / `DatabaseService`:
+  - Параметризовані SQL-запити.
+  - Транзакції для операцій переобліку та видалення зв'язаних сутностей.
+  - Оптимізований запит `GetAllInventorySummaries()`, що усуває проблему N+1 запитів при відображенні залишків.
+  - Автоматична міграція схеми та створення індексів (`idx_inventory_product_id`, `idx_recount_items_recount_id`, `idx_products_name`).
+  - Зворотна сумісність збережена через фасад `DataAccess`.
 
-Accessibility & UX
-- Use full-row selection on DataGridView.
-- Place action buttons near the grid they operate on.
-- Keep labels and hints for expected input formats.
+- **Шар парсингу цін (Services/Scrapers)**:
+  - `IBrowserPool` / `BrowserPool`: єдиний потокобезпечний пул Chromium із обмеженням конкурентності (`SemaphoreSlim`) та блокуванням важких ресурсів (зображення, шрифти, медіа).
+  - `IPriceScraperService` / `PriceScraperService`: паралельний парсинг за магазинами, безпечна обробка помилок та таймаутів, кеш Столичного ринку з TTL, JSON-LD парсинг.
+  - Зворотна сумісність збережена через фасади `PriceUpdaters` та `PriceUpdaterDebug`.
 
-Future UI improvements
-- Inline editing for grids.
-- Better forms with validation and friendly controls (numeric up/down, currency masks).
-- Calendar planning and per-day shopping list.
+- **Шар планування та розрахунків (Services/Planning)**:
+  - `IShoppingCalculationService` / `ShoppingCalculationService`: розрахунок закупок на основі страв та прямого списку, вирахування залишків, округлення до упаковок за обраними магазинами.
+  - `IWeeklyPlannerService` / `WeeklyPlannerService`: масштабування порцій страв, добові та тижневі підсумки калорійності/БЖВ/вартості.
+
+- **Шар експорту (Services/Export)**:
+  - `IExcelExportService` / `ExcelExportService`: генерація гарно оформлених звітів у форматі XLSX на базі EPPlus 8 (стилізовані шапки, кольорові підсумки, формули Excel).
+
+- **Шар представлення (WinForms UI)**:
+  - `MainForm`, `ShoppingPlannerForm`, `WeeklyPlannerForm`, `AddProductForm`, `AddRecipeForm`, `RecountAllForm`, `RecountHistoryForm`, `InventoryEditForm`, `ProgressForm`.
+  - Форми тепер тонкі та займаються виключно відображенням даних та взаємодією з користувачем.
+
+3. Модульне тестування (FoodManager.Tests)
+------------------------------------------
+Проект містить 24 unit-тести (xUnit):
+- Розрахунок харчової цінності та вартості страв.
+- Нормалізація цін та вибір найдешевшого магазину.
+- Парсинг цін із різних форматів рядків.
+- Розрахунок закупівельного плану та округлення до упаковок.
+- Тестування операцій з базою даних SQLite (CRUD, інвентаризація, транзакції переобліку).

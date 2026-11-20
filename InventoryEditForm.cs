@@ -8,7 +8,7 @@ namespace FoodManager
         public enum Mode { Add, Reduce }
 
         public int ProductId { get; }
-        public string ProductName { get; }
+        public new string ProductName { get; }
         public string Unit { get; }
         public Mode OperationMode { get; }
 
